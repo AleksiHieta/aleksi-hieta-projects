@@ -7,7 +7,7 @@
 // Wi-Fi & MQTT Settings
 const char* ssid = "YOUR_WIFI_SSID";
 const char* password = "YOUR_WIFI_PASSWORD";
-const char* mqtt_server = "://hivemq.com";
+const char* mqtt_server = "broker.emqx.io";
 const char* mqtt_topic = "my_secret_eink_topic_12345"; // Must match HTML!
 
 // CrowPanel 4.2" Internal Pinout (SSD1683 Driver, 400x300)

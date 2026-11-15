@@ -1,43 +1,104 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>E-Ink Messenger</title>
-  <script src="https://unpkg.com"></script>
+  <title>E-Ink Messenger + Live Preview</title>
+  <script src="mqtt.min.js"></script>
   <style>
     body { font-family: sans-serif; text-align: center; background: #f4f4f4; padding: 20px; }
-    canvas { border: 2px solid #333; background: #fff; touch-action: none; cursor: crosshair; }
-    button { padding: 10px 20px; font-size: 16px; margin: 10px; cursor: pointer; }
+    .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 30px; margin-top: 20px; }
+    .box { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    canvas { border: 2px solid #333; background: #fff; touch-action: none; display: block; margin: 10px auto; }
+    #pad { cursor: crosshair; }
+    #preview { background: #e8e8e5; border-color: #666; } /* Slight paper tint to mimic e-ink */
+    button { padding: 10px 20px; font-size: 16px; margin: 5px; cursor: pointer; }
+    #status { font-weight: bold; color: #555; }
   </style>
 </head>
 <body>
-  <h2>Draw for E-Ink Display</h2>
-  <canvas id="pad" width="400" height="300"></canvas>
-  <button onclick="clearCanvas()">Clear</button>
-  <button onclick="sendDrawing()">Send to Screen</button>
+  <h2>E-Ink Remote Messenger (400×300)</h2>
   <p id="status">Connecting to broker...</p>
+
+  <div class="container">
+    <!-- SENDER CANVAS -->
+    <div class="box">
+      <h3>1. Draw Here (Sender)</h3>
+      <canvas id="pad" width="400" height="300"></canvas>
+      <button onclick="clearCanvas()">Clear</button>
+      <button onclick="sendDrawing()">Send to Screen</button>
+    </div>
+
+    <!-- RECEIVER PREVIEW CANVAS -->
+    <div class="box">
+      <h3>2. Simulated E-Ink Display (Receiver)</h3>
+      <canvas id="preview" width="400" height="300"></canvas>
+      <p id="rx-status" style="color: #666; font-size: 14px;">Waiting for incoming drawing...</p>
+    </div>
+  </div>
 
   <script>
     const canvas = document.getElementById('pad');
     const ctx = canvas.getContext('2d');
-    const topic = "my_secret_eink_topic_12345"; // Change this to a unique name!
+    const prevCanvas = document.getElementById('preview');
+    const prevCtx = prevCanvas.getContext('2d');
+
+    const topic = "my_secret_eink_topic_12345"; // Must match your ESP32 code!
     let drawing = false;
 
-    // Fill white background
+    // Initialize white background on sender canvas
     ctx.fillStyle = "white";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.lineWidth = 4;
     ctx.lineCap = "round";
     ctx.strokeStyle = "black";
 
-    // Connect to public HiveMQ broker via WebSockets
-    const client = mqtt.connect('wss://://hivemq.com');
-    client.on('connect', () => document.getElementById('status').innerText = "Connected!");
+    // Connect to EMQX broker over secure WebSockets
+    const clientId = 'web_client_' + Math.random().toString(16).substr(2, 8);
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', { clientId: clientId });
 
-    // Mouse & Touch Events
+    client.on('connect', () => {
+      document.getElementById('status').innerText = "Connected to MQTT Broker!";
+      document.getElementById('status').style.color = "green";
+      // Subscribe to the same topic so this page acts as a live receiver too
+      client.subscribe(topic);
+    });
+
+    client.on('error', (err) => {
+      document.getElementById('status').innerText = "Error: " + err.message;
+      document.getElementById('status').style.color = "red";
+    });
+
+    // Receive MQTT message and decode hex back into pixels (simulates the ESP32)
+    client.on('message', (receivedTopic, message) => {
+      if (receivedTopic !== topic) return;
+      const hexString = message.toString();
+      if (hexString.length < 30000) return;
+
+      const imgData = prevCtx.createImageData(prevCanvas.width, prevCanvas.height);
+      const data = imgData.data;
+
+      for (let i = 0; i < 15000; i++) {
+        const byte = parseInt(hexString.substr(i * 2, 2), 16);
+        for (let bit = 0; bit < 8; bit++) {
+          const isBlack = (byte >> (7 - bit)) & 1;
+          const pixelIndex = (i * 8 + bit) * 4;
+          
+          // E-ink paper look: dark charcoal (#1a1a1a) on warm off-white (#e8e8e5)
+          data[pixelIndex]     = isBlack ? 26 : 232; // R
+          data[pixelIndex + 1] = isBlack ? 26 : 232; // G
+          data[pixelIndex + 2] = isBlack ? 26 : 229; // B
+          data[pixelIndex + 3] = 255;                // Alpha
+        }
+      }
+
+      prevCtx.putImageData(imgData, 0, 0);
+      document.getElementById('rx-status').innerText = "Received at " + new Date().toLocaleTimeString();
+    });
+
+    // Mouse & Touch Drawing Logic
     const getPos = (e) => {
       const rect = canvas.getBoundingClientRect();
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const clientX = e.touches ? e.touches.clientX : e.clientX;
+      const clientY = e.touches ? e.touches.clientY : e.clientY;
       return { x: clientX - rect.left, y: clientY - rect.top };
     };
 
@@ -49,6 +110,7 @@
     canvas.addEventListener('touchstart', start); canvas.addEventListener('touchmove', move); window.addEventListener('touchend', end);
 
     function clearCanvas() {
+      ctx.fillStyle = "white";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
@@ -56,18 +118,16 @@
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
       let hexString = "";
       
-      // Pack 8 pixels into 1 byte (2 hex characters)
       for (let i = 0; i < imgData.length; i += 32) {
         let byte = 0;
         for (let bit = 0; bit < 8; bit++) {
-          const r = imgData[i + (bit * 4)]; // Check red channel
-          if (r < 128) byte |= (1 << (7 - bit)); // 1 = Black pixel
+          const r = imgData[i + (bit * 4)];
+          if (r < 128) byte |= (1 << (7 - bit));
         }
         hexString += byte.toString(16).padStart(2, '0');
       }
       
       client.publish(topic, hexString);
-      document.getElementById('status').innerText = "Sent!";
     }
   </script>
 </body>
