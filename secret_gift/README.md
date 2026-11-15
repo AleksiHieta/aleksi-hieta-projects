@@ -1,1 +1,5 @@
 This set of code will be for driving an ESP32 based sticky note display with remote access and storage
+
+In the Arduino IDE, select Tools → Board → ESP32S3 Dev Module (and set PSRAM: "OPI PSRAM")
+
+Screen Link: https://www.amazon.com/ELECROW-CrowPanel-Compatible-Resolution-Interface/dp/B0G43FCHFX/ref=sr_1_4?adgrpid=199750665802&dib=eyJ2IjoiMSJ9.tA7Yv0iqr_zr7o8nRXr2TYj37qYeOa4K9shjDq_4kgU-kyFHSSBQ3D2GtrQ24sECAvd9icLAmkLQqTahnOKu-qW1wXQZBNr5t9EsUK1uDNwEBYfRwx4WQWhUBCMYzXyoehhBqmBtnl18D1XpVyGfuA6zlQp7IXtt3vjcyWOU0cyZhLHrowjQB8LpZBHKICabiOkfmNYXyPxOXyyb4oOXiTpE2E0r3EJ3pKepP36Qpyg.eTLXcQSMqXIH24LQn-kEBA8--TWpj59gBS1Xmv8-xIQ&dib_tag=se&hvadid=816680132799&hvdev=c&hvexpln=0&hvlocphy=9032027&hvnetw=g&hvocijid=18193007628430394844--&hvqmt=b&hvrand=18193007628430394844&hvtargid=kwd-1596785251581&hydadcr=13924_13840273_2527137&keywords=e%2Bpaper%2Bdisplay%2Besp32&mcid=51ea2eb3599a38faa03f05f1277145b9&qid=1794724543&sr=8-4&th=1

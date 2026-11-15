@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>E-Ink Messenger</title>
+  <script src="https://unpkg.com"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #f4f4f4; padding: 20px; }
+    canvas { border: 2px solid #333; background: #fff; touch-action: none; cursor: crosshair; }
+    button { padding: 10px 20px; font-size: 16px; margin: 10px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h2>Draw for E-Ink Display</h2>
+  <canvas id="pad" width="400" height="300"></canvas>
+  <button onclick="clearCanvas()">Clear</button>
+  <button onclick="sendDrawing()">Send to Screen</button>
+  <p id="status">Connecting to broker...</p>
+
+  <script>
+    const canvas = document.getElementById('pad');
+    const ctx = canvas.getContext('2d');
+    const topic = "my_secret_eink_topic_12345"; // Change this to a unique name!
+    let drawing = false;
+
+    // Fill white background
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "black";
+
+    // Connect to public HiveMQ broker via WebSockets
+    const client = mqtt.connect('wss://://hivemq.com');
+    client.on('connect', () => document.getElementById('status').innerText = "Connected!");
+
+    // Mouse & Touch Events
+    const getPos = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x: clientX - rect.left, y: clientY - rect.top };
+    };
+
+    const start = (e) => { drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y); };
+    const move = (e) => { if (!drawing) return; e.preventDefault(); const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); };
+    const end = () => { drawing = false; };
+
+    canvas.addEventListener('mousedown', start); canvas.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
+    canvas.addEventListener('touchstart', start); canvas.addEventListener('touchmove', move); window.addEventListener('touchend', end);
+
+    function clearCanvas() {
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function sendDrawing() {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let hexString = "";
+      
+      // Pack 8 pixels into 1 byte (2 hex characters)
+      for (let i = 0; i < imgData.length; i += 32) {
+        let byte = 0;
+        for (let bit = 0; bit < 8; bit++) {
+          const r = imgData[i + (bit * 4)]; // Check red channel
+          if (r < 128) byte |= (1 << (7 - bit)); // 1 = Black pixel
+        }
+        hexString += byte.toString(16).padStart(2, '0');
+      }
+      
+      client.publish(topic, hexString);
+      document.getElementById('status').innerText = "Sent!";
+    }
+  </script>
+</body>
+</html>
