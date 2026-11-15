@@ -1,0 +1,1 @@
+This set of code will be for driving an ESP32 based sticky note display with remote access and storage
