@@ -1,134 +1,326 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>E-Ink Messenger + Live Preview</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CrowPanel E-Ink Messenger</title>
+  <!-- Put mqtt.min.js (MQTT.js browser build) beside this file. -->
   <script src="mqtt.min.js"></script>
   <style>
-    body { font-family: sans-serif; text-align: center; background: #f4f4f4; padding: 20px; }
-    .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 30px; margin-top: 20px; }
-    .box { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
-    canvas { border: 2px solid #333; background: #fff; touch-action: none; display: block; margin: 10px auto; }
-    #pad { cursor: crosshair; }
-    #preview { background: #e8e8e5; border-color: #666; } /* Slight paper tint to mimic e-ink */
-    button { padding: 10px 20px; font-size: 16px; margin: 5px; cursor: pointer; }
-    #status { font-weight: bold; color: #555; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 20px; background: #f4f4f4; color: #222;
+      font-family: system-ui, sans-serif; text-align: center;
+    }
+    .container {
+      display: flex; flex-wrap: wrap; justify-content: center;
+      align-items: flex-start; gap: 22px; margin: 20px auto;
+    }
+    .box {
+      background: #fff; padding: 16px; border-radius: 10px;
+      box-shadow: 0 2px 7px #00000016; width: min(100%, 440px);
+    }
+    canvas {
+      display: block; width: 100%; max-width: 400px; height: auto;
+      aspect-ratio: 4 / 3; border: 2px solid #333; background: #fff;
+      margin: 10px auto; touch-action: none;
+    }
+    #preview { background: #e8e8e5; border-color: #666; }
+    input {
+      display: block; width: 100%; padding: 11px; margin: 10px 0;
+      font: inherit; border: 1px solid #bbb; border-radius: 6px;
+    }
+    button {
+      padding: 10px 18px; margin: 5px; font-size: 15px;
+      border: 0; border-radius: 6px; cursor: pointer;
+      background: #222; color: white;
+    }
+    button.secondary { background: #666; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    #status { font-weight: 650; color: #555; }
+    .hint { color: #666; font-size: 13px; }
+    .preview-frame {
+      max-width: 400px; margin: 10px auto; background: #e8e8e5;
+      border: 2px solid #666; color: #111; text-align: left;
+    }
+    .preview-header { padding: 7px 9px 5px; border-bottom: 1px solid #777; }
+    .preview-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+    .preview-message {
+      font-weight: 700; font-size: 17px; line-height: 1.2;
+      min-height: 22px; margin-top: 5px; overflow-wrap: anywhere;
+    }
+    .preview-frame canvas {
+      width: 100%; border: 0; margin: 0; background: transparent;
+    }
+    @media (max-width: 480px) { body { padding: 10px; } }
   </style>
 </head>
 <body>
-  <h2>E-Ink Remote Messenger (400×300)</h2>
-  <p id="status">Connecting to broker...</p>
+  <h2>CrowPanel E-Ink Messenger</h2>
+  <p id="status">Connecting to MQTT broker...</p>
 
   <div class="container">
-    <!-- SENDER CANVAS -->
-    <div class="box">
-      <h3>1. Draw Here (Sender)</h3>
-      <canvas id="pad" width="400" height="300"></canvas>
-      <button onclick="clearCanvas()">Clear</button>
-      <button onclick="sendDrawing()">Send to Screen</button>
-    </div>
+    <section class="box">
+      <h3>1. Compose message</h3>
+      <label for="messageText">Text shown at the top of the receiver</label>
+      <input id="messageText" type="text" maxlength="80"
+             placeholder="Type your message (up to 80 characters)">
+      <canvas id="pad" width="400" height="300" aria-label="Drawing canvas"></canvas>
+      <button id="clearButton" class="secondary" type="button">Clear drawing</button>
+      <button id="sendButton" type="button" disabled>Send to screen</button>
+      <p class="hint">The date is added automatically when you send.</p>
+    </section>
 
-    <!-- RECEIVER PREVIEW CANVAS -->
-    <div class="box">
-      <h3>2. Simulated E-Ink Display (Receiver)</h3>
-      <canvas id="preview" width="400" height="300"></canvas>
-      <p id="rx-status" style="color: #666; font-size: 14px;">Waiting for incoming drawing...</p>
-    </div>
+    <section class="box">
+      <h3>2. Receiver preview</h3>
+      <div class="preview-frame">
+        <div class="preview-header">
+          <div class="preview-meta">
+            <span id="previewDate">YYYY-MM-DD</span>
+            <span id="previewId">NEW MESSAGE</span>
+          </div>
+          <div class="preview-message" id="previewMessage"></div>
+        </div>
+        <canvas id="preview" width="400" height="257"
+                aria-label="Drawing preview"></canvas>
+      </div>
+      <p id="rxStatus" class="hint">Waiting for a message...</p>
+    </section>
   </div>
 
-  <script>
-    const canvas = document.getElementById('pad');
-    const ctx = canvas.getContext('2d');
-    const prevCanvas = document.getElementById('preview');
-    const prevCtx = prevCanvas.getContext('2d');
+<script>
+(() => {
+  const WIDTH = 400, HEIGHT = 300;
+  const PIXELS = WIDTH * HEIGHT;
+  const BYTES = PIXELS / 8;
+  const HEX_LENGTH = BYTES * 2;
+  const TOPIC = "my_secret_eink_topic_12345";
 
-    const topic = "my_secret_eink_topic_12345"; // Must match your ESP32 code!
-    let drawing = false;
+  const pad = document.getElementById("pad");
+  const ctx = pad.getContext("2d", { willReadFrequently: true });
+  const preview = document.getElementById("preview");
+  const previewCtx = preview.getContext("2d");
+  const messageInput = document.getElementById("messageText");
+  const sendButton = document.getElementById("sendButton");
+  const status = document.getElementById("status");
+  const rxStatus = document.getElementById("rxStatus");
 
-    // Initialize white background on sender canvas
-    ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.lineWidth = 4;
-    ctx.lineCap = "round";
-    ctx.strokeStyle = "black";
+  let drawing = false;
+  let localMessageCounter = 0;
 
-    // Connect to EMQX broker over secure WebSockets
-    const clientId = 'web_client_' + Math.random().toString(16).substr(2, 8);
-    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', { clientId: clientId });
+  function setStatus(text, color = "#555") {
+    status.textContent = text;
+    status.style.color = color;
+  }
 
-    client.on('connect', () => {
-      document.getElementById('status').innerText = "Connected to MQTT Broker!";
-      document.getElementById('status').style.color = "green";
-      // Subscribe to the same topic so this page acts as a live receiver too
-      client.subscribe(topic);
-    });
+  function todayLocal() {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
 
-    client.on('error', (err) => {
-      document.getElementById('status').innerText = "Error: " + err.message;
-      document.getElementById('status').style.color = "red";
-    });
+  // Receiver's built-in GFX font is basic ASCII. Replace non-ASCII and
+  // protocol separators so every message can be safely parsed and displayed.
+  function cleanMessage(value) {
+    return Array.from(value)
+      .map(ch => {
+        const code = ch.codePointAt(0);
+        if (ch === "|" || code < 32 || code > 126) return " ";
+        return ch;
+      })
+      .join("")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+  }
 
-    // Receive MQTT message and decode hex back into pixels (simulates the ESP32)
-    client.on('message', (receivedTopic, message) => {
-      if (receivedTopic !== topic) return;
-      const hexString = message.toString();
-      if (hexString.length < 30000) return;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
 
-      const imgData = prevCtx.createImageData(prevCanvas.width, prevCanvas.height);
-      const data = imgData.data;
+  previewCtx.fillStyle = "#e8e8e5";
+  previewCtx.fillRect(0, 0, preview.width, preview.height);
 
-      for (let i = 0; i < 15000; i++) {
-        const byte = parseInt(hexString.substr(i * 2, 2), 16);
-        for (let bit = 0; bit < 8; bit++) {
-          const isBlack = (byte >> (7 - bit)) & 1;
-          const pixelIndex = (i * 8 + bit) * 4;
-          
-          // E-ink paper look: dark charcoal (#1a1a1a) on warm off-white (#e8e8e5)
-          data[pixelIndex]     = isBlack ? 26 : 232; // R
-          data[pixelIndex + 1] = isBlack ? 26 : 232; // G
-          data[pixelIndex + 2] = isBlack ? 26 : 229; // B
-          data[pixelIndex + 3] = 255;                // Alpha
-        }
-      }
-
-      prevCtx.putImageData(imgData, 0, 0);
-      document.getElementById('rx-status').innerText = "Received at " + new Date().toLocaleTimeString();
-    });
-
-    // Mouse & Touch Drawing Logic
-    const getPos = (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const clientX = e.touches ? e.touches.clientX : e.clientX;
-      const clientY = e.touches ? e.touches.clientY : e.clientY;
-      return { x: clientX - rect.left, y: clientY - rect.top };
+  function position(e) {
+    const rect = pad.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * WIDTH / rect.width,
+      y: (e.clientY - rect.top) * HEIGHT / rect.height
     };
+  }
 
-    const start = (e) => { drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y); };
-    const move = (e) => { if (!drawing) return; e.preventDefault(); const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); };
-    const end = () => { drawing = false; };
+  pad.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    drawing = true;
+    pad.setPointerCapture(e.pointerId);
+    const p = position(e);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, ctx.lineWidth / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+  });
 
-    canvas.addEventListener('mousedown', start); canvas.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
-    canvas.addEventListener('touchstart', start); canvas.addEventListener('touchmove', move); window.addEventListener('touchend', end);
+  pad.addEventListener("pointermove", e => {
+    if (!drawing) return;
+    e.preventDefault();
+    const p = position(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  });
 
-    function clearCanvas() {
-      ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
+  function stopDrawing() { drawing = false; }
+  pad.addEventListener("pointerup", stopDrawing);
+  pad.addEventListener("pointercancel", stopDrawing);
+  pad.addEventListener("lostpointercapture", stopDrawing);
 
-    function sendDrawing() {
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      let hexString = "";
-      
-      for (let i = 0; i < imgData.length; i += 32) {
-        let byte = 0;
-        for (let bit = 0; bit < 8; bit++) {
-          const r = imgData[i + (bit * 4)];
-          if (r < 128) byte |= (1 << (7 - bit));
-        }
-        hexString += byte.toString(16).padStart(2, '0');
+  document.getElementById("clearButton").addEventListener("click", () => {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    ctx.fillStyle = "#000";
+  });
+
+  function canvasToHex() {
+    const rgba = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+    const parts = new Array(BYTES);
+    let out = 0;
+
+    for (let pixel = 0; pixel < PIXELS; pixel += 8) {
+      let value = 0;
+      for (let bit = 0; bit < 8; bit++) {
+        if (rgba[(pixel + bit) * 4] < 128) value |= 1 << (7 - bit);
       }
-      
-      client.publish(topic, hexString);
+      parts[out++] = value.toString(16).padStart(2, "0");
     }
-  </script>
+    return parts.join("");
+  }
+
+  function renderPreview(date, message, hex, idLabel) {
+    if (hex.length !== HEX_LENGTH || !/^[0-9a-fA-F]+$/.test(hex)) return false;
+
+    const image = previewCtx.createImageData(WIDTH, HEIGHT);
+    const data = image.data;
+
+    for (let i = 0; i < BYTES; i++) {
+      const value = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+      for (let bit = 0; bit < 8; bit++) {
+        const black = (value >> (7 - bit)) & 1;
+        const p = (i * 8 + bit) * 4;
+        data[p] = black ? 26 : 232;
+        data[p + 1] = black ? 26 : 232;
+        data[p + 2] = black ? 26 : 229;
+        data[p + 3] = 255;
+      }
+    }
+
+    // Display a cropped view beneath the same header height as the device.
+    const fullCanvas = document.createElement("canvas");
+    fullCanvas.width = WIDTH;
+    fullCanvas.height = HEIGHT;
+    fullCanvas.getContext("2d").putImageData(image, 0, 0);
+
+    previewCtx.clearRect(0, 0, preview.width, preview.height);
+    previewCtx.drawImage(fullCanvas, 0, 43, WIDTH, HEIGHT - 43,
+                         0, 0, preview.width, preview.height);
+
+    document.getElementById("previewDate").textContent = date;
+    document.getElementById("previewMessage").textContent = message;
+    document.getElementById("previewId").textContent = idLabel;
+    return true;
+  }
+
+  if (typeof mqtt === "undefined") {
+    setStatus("MQTT.js missing. Put mqtt.min.js beside index.html.", "red");
+    return;
+  }
+
+  const clientId = "web_client_" + Math.random().toString(16).slice(2, 12);
+  const client = mqtt.connect("wss://broker.emqx.io:8084/mqtt", {
+    clientId, clean: true, connectTimeout: 10000,
+    reconnectPeriod: 3000, keepalive: 30
+  });
+
+  client.on("connect", () => {
+    setStatus("Connected; subscribing to message topic...", "green");
+    client.subscribe(TOPIC, { qos: 0 }, err => {
+      if (err) {
+        setStatus("Subscription failed: " + err.message, "red");
+        return;
+      }
+      sendButton.disabled = false;
+      setStatus("Connected. Ready to send.", "green");
+    });
+  });
+
+  client.on("reconnect", () => {
+    sendButton.disabled = true;
+    setStatus("Reconnecting...");
+  });
+  client.on("offline", () => {
+    sendButton.disabled = true;
+    setStatus("MQTT offline.", "red");
+  });
+  client.on("error", err => setStatus("MQTT error: " + err.message, "red"));
+
+  client.on("message", (topic, payload) => {
+    if (topic !== TOPIC) return;
+    const raw = new TextDecoder().decode(payload);
+    const first = raw.indexOf("|");
+    const second = raw.indexOf("|", first + 1);
+    const third = raw.indexOf("|", second + 1);
+    if (first < 0 || second < 0 || third < 0 || raw.slice(0, first) !== "V1") return;
+
+    const date = raw.slice(first + 1, second);
+    const message = raw.slice(second + 1, third);
+    const hex = raw.slice(third + 1);
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+        !renderPreview(date, message, hex, "RECEIVED")) {
+      rxStatus.textContent = "Ignored invalid message.";
+      return;
+    }
+    rxStatus.textContent = "Received at " + new Date().toLocaleTimeString();
+  });
+
+  sendButton.addEventListener("click", () => {
+    if (!client.connected) {
+      setStatus("Not connected; message was not sent.", "red");
+      return;
+    }
+
+    const date = todayLocal();
+    const message = cleanMessage(messageInput.value);
+    const hex = canvasToHex();
+    const payload = `V1|${date}|${message}|${hex}`;
+
+    if (hex.length !== HEX_LENGTH) {
+      setStatus("Bitmap size error; not sent.", "red");
+      return;
+    }
+
+    sendButton.disabled = true;
+    setStatus("Publishing message...");
+
+    client.publish(TOPIC, payload, { qos: 0, retain: false }, err => {
+      sendButton.disabled = !client.connected;
+      if (err) {
+        setStatus("Publish failed: " + err.message, "red");
+        return;
+      }
+
+      localMessageCounter++;
+      renderPreview(date, message, hex, "SENT");
+      rxStatus.textContent = "Sent message " + localMessageCounter +
+        " at " + new Date().toLocaleTimeString();
+      setStatus("Message sent. The CrowPanel will archive it.", "green");
+    });
+  });
+})();
+</script>
 </body>
 </html>
